@@ -341,3 +341,4 @@ def compute_climatological_baselines(
         .reset_index()
     )
     return stats_df
+

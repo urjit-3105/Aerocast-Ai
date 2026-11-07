@@ -234,3 +234,4 @@ FEATURE_LAGS: List[int] = [1, 2, 3, 7, 14]
 ROLLING_WINDOWS: List[int] = [7, 14]
 CONFIDENCE_LEVELS: List[float] = [0.80, 0.90, 0.95]
 DEFAULT_CONFIDENCE_LEVEL: float = 0.90
+

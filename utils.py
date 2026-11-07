@@ -154,6 +154,121 @@ def format_geographic_coordinate(lat: float, lon: float) -> str:
     return f"{abs(lat):.2f}° {lat_dir}, {abs(lon):.2f}° {lon_dir}"
 
 
+def compute_forecast_skill_score(
+    y_true: Union[np.ndarray, List[float], pd.Series],
+    y_pred: Union[np.ndarray, List[float], pd.Series],
+    y_baseline: Union[np.ndarray, List[float], pd.Series],
+) -> float:
+    """Calculates the standard meteorological Brier/Heidke Forecast Skill Score (SS).
+
+    Skill Score = 1 - (MSE_pred / MSE_baseline)
+    Scores > 0 indicate superior predictive accuracy over the baseline climatology/persistence.
+
+    Args:
+        y_true: Ground truth observed telemetry.
+        y_pred: Model predicted values.
+        y_baseline: Climatological normal or persistence forecast.
+
+    Returns:
+        Floating point skill score (typically -inf to +1.0).
+    """
+    yt = np.asarray(y_true, dtype=np.float64)
+    yp = np.asarray(y_pred, dtype=np.float64)
+    yb = np.asarray(y_baseline, dtype=np.float64)
+
+    mse_pred = np.mean((yt - yp) ** 2)
+    mse_base = np.mean((yt - yb) ** 2)
+
+    if mse_base < 1e-6:
+        return 0.0
+    skill = 1.0 - (mse_pred / mse_base)
+    return round(float(skill), 3)
+
+
+def detect_atmospheric_threats(
+    forecast_df: pd.DataFrame,
+    target_var: str,
+) -> List[Dict[str, Any]]:
+    """Scans forecasted trajectories for synoptic meteorological hazard thresholds.
+
+    Detects:
+    - Heatwave / Extreme Thermal Spike (> 33°C)
+    - Severe Frost / Sub-Zero Chill (< 0°C)
+    - Cyclonic Depression / Low Pressure System (< 995 hPa)
+    - Gale-Force Wind Velocity (> 55 km/h)
+    - High-Humidity Saturation / Fog / Inversion (> 92%)
+
+    Args:
+        forecast_df: DataFrame of forward simulated projections.
+        target_var: Active forecast variable name.
+
+    Returns:
+        List of detected atmospheric hazard dictionaries.
+    """
+    threats: List[Dict[str, Any]] = []
+
+    if target_var == "temperature_c":
+        heat_rows = forecast_df[forecast_df["predicted_value"] >= 32.0]
+        if not heat_rows.empty:
+            peak_temp = heat_rows["predicted_value"].max()
+            lead_d = heat_rows.loc[heat_rows["predicted_value"].idxmax()]["forecast_lead_day"]
+            threats.append({
+                "level": "WARNING" if peak_temp < 36.0 else "CRITICAL",
+                "title": "Severe Heatwave Watch",
+                "detail": f"Peak thermal spike of {peak_temp:.1f}°C projected at Lead Day +{lead_d}.",
+                "color": "#f43f5e",
+            })
+
+        frost_rows = forecast_df[forecast_df["predicted_value"] <= 2.0]
+        if not frost_rows.empty:
+            min_temp = frost_rows["predicted_value"].min()
+            lead_d = frost_rows.loc[frost_rows["predicted_value"].idxmin()]["forecast_lead_day"]
+            threats.append({
+                "level": "ADVISORY" if min_temp >= 0.0 else "WARNING",
+                "title": "Sub-Zero Freeze Hazard",
+                "detail": f"Freezing surface temperatures down to {min_temp:.1f}°C projected at Lead Day +{lead_d}.",
+                "color": "#38bdf8",
+            })
+
+    elif target_var == "pressure_hpa":
+        storm_rows = forecast_df[forecast_df["predicted_value"] <= 998.0]
+        if not storm_rows.empty:
+            min_p = storm_rows["predicted_value"].min()
+            lead_d = storm_rows.loc[storm_rows["predicted_value"].idxmin()]["forecast_lead_day"]
+            threats.append({
+                "level": "CRITICAL" if min_p < 990.0 else "WARNING",
+                "title": "Deep Cyclonic Depression",
+                "detail": f"Barometric trough dropping to {min_p:.1f} hPa at Lead Day +{lead_d}.",
+                "color": "#a855f7",
+            })
+
+    elif target_var == "wind_speed_kmh":
+        gale_rows = forecast_df[forecast_df["predicted_value"] >= 45.0]
+        if not gale_rows.empty:
+            max_w = gale_rows["predicted_value"].max()
+            lead_d = gale_rows.loc[gale_rows["predicted_value"].idxmax()]["forecast_lead_day"]
+            threats.append({
+                "level": "CRITICAL" if max_w >= 65.0 else "WARNING",
+                "title": "Gale-Force Wind Alert",
+                "detail": f"Severe wind shear gusts reaching {max_w:.1f} km/h at Lead Day +{lead_d}.",
+                "color": "#06b6d4",
+            })
+
+    elif target_var == "humidity_pct":
+        sat_rows = forecast_df[forecast_df["predicted_value"] >= 90.0]
+        if not sat_rows.empty:
+            max_h = sat_rows["predicted_value"].max()
+            lead_d = sat_rows.loc[sat_rows["predicted_value"].idxmax()]["forecast_lead_day"]
+            threats.append({
+                "level": "ADVISORY",
+                "title": "High Moisture Saturation",
+                "detail": f"Atmospheric saturation reaching {max_h:.1f}% relative humidity at Lead Day +{lead_d}.",
+                "color": "#10b981",
+            })
+
+    return threats
+
+
 def haversine_distance_km(
     lat1: float, lon1: float, lat2: float, lon2: float
 ) -> float:
@@ -221,3 +336,4 @@ def generate_status_badge_html(
         </span>
     </div>
     """
+
