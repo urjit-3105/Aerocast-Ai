@@ -246,14 +246,17 @@ class SpatialTemporalForecaster:
         max_lag = max(FEATURE_LAGS)
         valid_train_df = enriched_history.dropna().copy()
 
-        # Determine Feature Columns
+        # Determine Feature Columns - Exclude identifiers and contemporaneous raw targets
         exclude_cols = {
             "timestamp",
             "date",
             "station_id",
             "station_name",
             "zone_id",
-            self.target_var,
+            "temperature_c",
+            "pressure_hpa",
+            "humidity_pct",
+            "wind_speed_kmh",
         }
         self.feature_cols = [
             c for c in valid_train_df.columns if c not in exclude_cols
@@ -361,15 +364,18 @@ class SpatialTemporalForecaster:
                         np.min(slice_vals)
                     )
 
-                # Coupled variables fallback
+                # Coupled variables fallback with robust null-safety
                 if "pressure_tendency" in self.feature_cols:
                     new_row["pressure_tendency"] = 0.0
                 if "pressure_lag_1" in self.feature_cols:
-                    new_row["pressure_lag_1"] = stn_meta.get("pressure_hpa", 1013.25)
+                    p_val = stn_meta.get("pressure_hpa", 1013.25)
+                    new_row["pressure_lag_1"] = 1013.25 if (p_val is None or pd.isna(p_val)) else float(p_val)
                 if "humidity_lag_1" in self.feature_cols:
-                    new_row["humidity_lag_1"] = stn_meta.get("humidity_pct", 65.0)
+                    h_val = stn_meta.get("humidity_pct", 65.0)
+                    new_row["humidity_lag_1"] = 65.0 if (h_val is None or pd.isna(h_val)) else float(h_val)
                 if "wind_lag_1" in self.feature_cols:
-                    new_row["wind_lag_1"] = stn_meta.get("wind_speed_kmh", 15.0)
+                    w_val = stn_meta.get("wind_speed_kmh", 15.0)
+                    new_row["wind_lag_1"] = 15.0 if (w_val is None or pd.isna(w_val)) else float(w_val)
 
                 # Spatial network lag
                 new_row["spatial_network_mean_lag_1"] = float(
@@ -378,8 +384,9 @@ class SpatialTemporalForecaster:
                     .mean()
                 )
 
-                # Assemble feature vector
-                feat_vector = pd.DataFrame([new_row])[self.feature_cols]
+                # Assemble feature vector safely with defaults for any missing key
+                feat_dict = {col: new_row.get(col, 0.0) for col in self.feature_cols}
+                feat_vector = pd.DataFrame([feat_dict])[self.feature_cols]
 
                 # Model Prediction
                 pred_val = float(self.model.predict(feat_vector)[0])
